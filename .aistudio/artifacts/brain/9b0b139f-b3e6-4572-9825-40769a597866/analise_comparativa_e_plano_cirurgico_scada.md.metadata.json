@@ -1,0 +1,6 @@
+{
+  "summary": "Especificação Técnica e Contrato Oficial do Mapa Modbus v2.1 para o CLP e SCADA: Fechamento do PID no CLP, segurança positiva NF no E-STOP (Função 02), escalas calibradas (FT-101 e tensões), analisadores ISE com qualidade, código de erro SCD-PLC-009, mapaModbus.ts tipado integral e cronograma cirúrgico fatiado com contenção imediata de segurança.",
+  "updatedAt": "2026-10-07T01:31:41.943345766Z",
+  "requestFeedback": true,
+  "userFacing": true
+}

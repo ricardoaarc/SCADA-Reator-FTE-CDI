@@ -1,0 +1,6 @@
+{
+  "summary":  "Plano detalhado de implementação em 3 fases para incorporar ao SCADA FTE-CDI as capacidades de Fórmulas Dinâmicas (Meta Tags), Alertas Externos Multicanal (Telegram/Webhook) e Gateway de Conexão Física a PLCs (Modbus TCP/RTU e Supabase Realtime).",
+  "updatedAt":  "2026-09-27T23:26:26.294832161Z",
+  "requestFeedback":  true,
+  "userFacing":  true
+}

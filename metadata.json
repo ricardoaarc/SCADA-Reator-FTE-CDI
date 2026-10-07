@@ -1,0 +1,8 @@
+{
+  "name": "Remix SCADA Reator FTE-CDI",
+  "description": "Sistema Supervisório SCADA para Rack de 10 células FTE-CDI com controle PID de vazão/pressão, interface para CLP real Modbus, autenticação de operador com auditoria, exportação de relatórios PDF/Excel, instrumentação físico-química completa e alarmes push/e-mail.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
