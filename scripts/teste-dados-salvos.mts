@@ -1,11 +1,12 @@
 // @ts-nocheck
 // Rodar da raiz do repositório: npx tsx teste-dados-salvos.mts   (precisa de teste-dados-salvos-filho.mts ao lado)
 import { execFileSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 const ROOT='../';
 let ok=0,bad=0; const t=(n:string,c:boolean)=>{console.log((c?'PASS ':'FAIL ')+n); c?ok++:bad++;};
 const filho=(modo:string,seed:Record<string,string>={},extra:Record<string,string>={}):any=>{
-  const scriptFilho = new URL('./teste-dados-salvos-filho.mts', import.meta.url).pathname;
-  const out=execFileSync('npx',['tsx',scriptFilho],{env:{...process.env,MODO:modo,SEED:JSON.stringify(seed),...extra},encoding:'utf8',cwd:process.cwd()});
+  const scriptFilho = fileURLToPath(new URL('./teste-dados-salvos-filho.mts', import.meta.url));
+  const out=execFileSync('npx',['tsx',scriptFilho],{env:{...process.env,MODO:modo,SEED:JSON.stringify(seed),...extra},encoding:'utf8',cwd:process.cwd(),shell:true});
   return JSON.parse(out.split('\n').find(l=>l.startsWith('@@'))!.slice(2));
 };
 

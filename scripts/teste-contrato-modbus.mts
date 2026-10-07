@@ -12,7 +12,7 @@
  * nasça 100% VERDE (PASS).
  */
 
-import { lerConfigPlc } from '../server/plcGateway';
+import { lerConfigPlc, enderecoParaModbus, ModbusGateway } from '../server/plcGateway';
 import { plcService } from '../src/services/PlcService';
 import {
   MAPA_MODBUS_LEGADO,
@@ -79,12 +79,16 @@ asserir(
   `Lista atual: ${configPadrao.listaEscrita.join(',')}`
 );
 
-// Na v2.1, a Coil 3 (XV-102) será permitida, e o E-STOP é Discrete Input (10001)
+// PR-3c: Allowlist do Mapa v2.1 configurada com coils 1,2,3,4,6, setpoints 40010, 40016 e watchdog 40015
+const configV21 = lerConfigPlc({ PLC_WRITE_ALLOWLIST: '1,2,3,4,6,40010,40015,40016' });
 asserir(
-  'Divergência de allowlist: Coil 3 bloqueada no gateway legado (v2.1 permitirá XV-102)',
-  configPadrao.listaEscrita.includes(3),
-  'Coil 3 atualmente bloqueada na allowlist padrão 1,2,4',
-  true // Esperado falhar no código legado até PR-3
+  'PR-3c: Allowlist do Mapa v2.1 inclui Válvula de Purga XV-102 (Coil 3), Modo PID (Coil 6), SP 40010 e Watchdog 40015',
+  configV21.listaEscrita.includes(3) &&
+  configV21.listaEscrita.includes(6) &&
+  configV21.listaEscrita.includes(40010) &&
+  configV21.listaEscrita.includes(40015) &&
+  configV21.listaEscrita.includes(40016),
+  'Allowlist v2.1 deve autorizar todos os pontos operacionais'
 );
 
 // 2. Contrato de Endereçamento dos Registradores no PlcService
@@ -106,28 +110,25 @@ asserir('Holding 40010 é Setpoint do PID (escrita permitida no contrato v2.1)',
   '40010 deve permitir escrita de Setpoint'
 );
 
-// Divergência: Registrador 40011 (Saída do Inversor VFD) ainda não criado no mapa legado
+// PR-3b: Registrador 40011 (Saída do Inversor VFD) implementado no mapa v2.1
 asserir(
-  'Divergência de registrador: Holding 40011 (CV-VFD) presente no mapa',
-  Boolean(regs[40011]),
-  'Holding 40011 será implementado formalmente no PR-3b',
-  true // Esperado falhar até PR-3
+  'PR-3b: Holding 40011 (CV-VFD) presente no mapa e configurado como somente-leitura',
+  Boolean(regs[40011]) && regs[40011].somenteLeitura === true,
+  'Holding 40011 deve existir e ser Read-Only'
 );
 
-// Divergência: Registrador 40013 (Fluoreto de Saída) ainda não criado no mapa legado
+// PR-3b: Registrador 40013 (Fluoreto de Saída) implementado no mapa v2.1
 asserir(
-  'Divergência de registrador: Holding 40013 (Fluoreto Saída AIT-102) presente',
-  Boolean(regs[40013]),
-  'Holding 40013 será implementado formalmente no PR-3b',
-  true // Esperado falhar até PR-3
+  'PR-3b: Holding 40013 (Fluoreto Saída AIT-102) presente e tipado',
+  Boolean(regs[40013]) && /Fluoreto/i.test(regs[40013].nome),
+  'Holding 40013 deve existir'
 );
 
-// Divergência: MAP_VERSION no registrador 40099
+// PR-3b: MAP_VERSION no registrador 40099
 asserir(
-  'Divergência de registrador: Holding 40099 (MAP_VERSION) presente',
-  Boolean(regs[40099]),
-  'Holding 40099 será implementado formalmente no PR-3b',
-  true // Esperado falhar até PR-3
+  'PR-3b: Holding 40099 (MAP_VERSION) presente com valor padrão 21',
+  Boolean(regs[40099]) && regs[40099].valor === 21,
+  'Holding 40099 deve existir e ter valor 21'
 );
 
 // 3. Contrato de Proteção contra Sobrescrita Indevida na Telemetria
@@ -167,18 +168,19 @@ if (docExiste) {
 }
 
 // 5. Contrato da Fonte Única Oficial mapaModbus.ts (PR-3a)
-console.log('\n--- 5. Contrato da Fonte Única Oficial mapaModbus.ts (PR-3a) ---');
+// 5. Contrato da Fonte Única Oficial mapaModbus.ts (PR-3a) e Implementação v2.1 (PR-3b..PR-3d)
+console.log('\n--- 5. Contrato da Fonte Única Oficial mapaModbus.ts e v2.1 (PR-3a..PR-3d) ---');
 
-// 5.1 Paridade exata do MAPA_MODBUS_LEGADO com PlcService
-const chavesLegado = Object.keys(MAPA_MODBUS_LEGADO).map(Number);
+// 5.1 Paridade exata do PlcService com MAPA_MODBUS_V2_1
+const chavesV21 = Object.keys(MAPA_MODBUS_V2_1).map(Number);
 const chavesPlcService = Object.keys(regs).map(Number);
-const paridadeLegado = chavesLegado.length === chavesPlcService.length &&
-  chavesLegado.every(k => regs[k] && regs[k].nome === MAPA_MODBUS_LEGADO[k].nome);
+const paridadeV21 = chavesV21.length === chavesPlcService.length &&
+  chavesV21.every(k => regs[k] && regs[k].nome === MAPA_MODBUS_V2_1[k].nome);
 
 asserir(
-  'PR-3a: MAPA_MODBUS_LEGADO possui paridade estrita 100% com PlcService',
-  paridadeLegado,
-  `Divergência entre chaves do legado (${chavesLegado.length}) e PlcService (${chavesPlcService.length})`
+  'PR-3b: PlcService possui paridade estrita 100% com os 28 pontos do MAPA_MODBUS_V2_1',
+  paridadeV21,
+  `Divergência entre chaves do v2.1 (${chavesV21.length}) e PlcService (${chavesPlcService.length})`
 );
 
 // 5.2 Integralidade de Pontos do MAPA_MODBUS_V2_1
@@ -275,6 +277,38 @@ asserir(
   'PR-3a: Registrador 40099 (MAP_VERSION) possui valor padrão 21 (v2.1)',
   REGISTRADOR_MAP_VERSION === 40099 && MAP_VERSION_ATUAL === 21 && MAPA_MODBUS_V2_1[40099]?.valorPadrao === 21,
   'MAP_VERSION deve ser 21 no registrador 40099'
+);
+
+// 5.8 PR-3c: Suporte a Funções 02 (Discrete Inputs) e 04 (Input Registers) no gateway
+const mDI = enderecoParaModbus(10001);
+const mIR = enderecoParaModbus(30001);
+asserir(
+  'PR-3c: enderecoParaModbus mapeia Discrete Input (10001 -> DISCRETE_INPUT offset 0)',
+  mDI.tipo === 'DISCRETE_INPUT' && mDI.offset === 0,
+  'Mapeamento da Função 02 incorreto'
+);
+asserir(
+  'PR-3c: enderecoParaModbus mapeia Input Register (30001 -> INPUT_REGISTER offset 0)',
+  mIR.tipo === 'INPUT_REGISTER' && mIR.offset === 0,
+  'Mapeamento da Função 04 incorreto'
+);
+
+// 5.9 PR-3d: Verificação do Watchdog industrial no gateway
+const gwWatchdog = new ModbusGateway(configV21);
+const statusInicialWd = gwWatchdog.obterStatusWatchdog();
+asserir(
+  'PR-3d: Gateway instancia watchdog industrial com status monitorável',
+  statusInicialWd.ativo === false && statusInicialWd.contador >= 1,
+  'Estado do watchdog inválido'
+);
+gwWatchdog.fechar();
+
+// 5.10 PR-3b: PlcService bloqueia escrita em registrador somente-leitura
+const resultadoEscritaRO = await plcService.escreverRegistrador(40011, 80);
+asserir(
+  'PR-3b: PlcService bloqueia escrita em registrador somente-leitura 40011 (CV-VFD) com SCD-PLC-004',
+  resultadoEscritaRO.ok === false && resultadoEscritaRO.codigo === 'SCD-PLC-004',
+  'Deveria recusar escrita em registrador somente-leitura'
 );
 
 console.log('\n================================================================');

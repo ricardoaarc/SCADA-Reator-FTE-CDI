@@ -447,7 +447,7 @@ export type PlcConnectionStatus = 'CONECTADO' | 'CONECTANDO' | 'DESCONECTADO' | 
 
 export interface ModbusRegister {
   endereco: number;
-  tipo: 'HOLDING_REGISTER' | 'COIL';
+  tipo: 'HOLDING_REGISTER' | 'COIL' | 'DISCRETE_INPUT' | 'INPUT_REGISTER';
   nome: string;
   descricao: string;
   valor: any;

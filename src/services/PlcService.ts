@@ -11,13 +11,19 @@ import {
 } from "./plcTransport";
 import { HttpGatewayTransport } from "./httpGatewayTransport";
 
-import { MAPA_MODBUS_LEGADO } from "./mapaModbus";
+import {
+  MAPA_MODBUS_V2_1_REGISTRADORES,
+  MAP_VERSION_ATUAL,
+  REGISTRADOR_MAP_VERSION,
+  validarEscritaModbusV21,
+  validarPlausibilidadeLeitura
+} from "./mapaModbus";
 
 // Coils que ENERGIZAM equipamento (bomba, fonte DC) e a coil de intertravamento/E-STOP
 const COILS_ENERGIZACAO = [1, 2];
 const COIL_INTERLOCK = 3;
 
-const REGISTRADORES_INICIAIS: Record<number, ModbusRegister> = JSON.parse(JSON.stringify(MAPA_MODBUS_LEGADO));
+const REGISTRADORES_INICIAIS: Record<number, ModbusRegister> = JSON.parse(JSON.stringify(MAPA_MODBUS_V2_1_REGISTRADORES));
 
 export interface ResultadoPing {
   sucesso: boolean;
@@ -64,6 +70,8 @@ class PlcService {
   /** Valores brutos que transmissores/CLPs usam para sinalizar falha (0xFFFF, 0x8000, 0x7FFF). */
   private static readonly RAW_FALHA = new Set([65535, 32768, 32767]);
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+  /** PR-3b: Validação cíclica de compatibilidade de versão de mapa (40099) */
+  private versaoMapaValida = true;
 
   constructor() {
     // Ciclo de heartbeat: no simulador só mantém os contadores; em CLP_REAL verifica a comunicação de verdade
@@ -193,23 +201,49 @@ class PlcService {
 
     gravar(40001, dados.pressaoBar, 100);
     gravar(40002, dados.vazaoLitrosHora, 1);
-    gravar(40003, dados.tensaoV, 100);
-    gravar(40004, dados.correnteAmp, 10);
-    gravar(40005, dados.ph, 100);
-    gravar(40006, dados.condutividadeInUsCm, 1);
-    gravar(40007, dados.condutividadeOutUsCm, 1);
-    gravar(40008, dados.fluoretoInPPM, 100);
-    gravar(40009, dados.fluoretoOutPPM, 100);
+    // 40003/40004: apenas se o campo estiver presente (sem inventar valor padrão)
+    if (dados.condutividadeInUsCm !== undefined) gravar(40003, dados.condutividadeInUsCm, 1);
+    else if (dados.tensaoV !== undefined)        gravar(40003, dados.tensaoV, 1);
+    if (dados.condutividadeOutUsCm !== undefined) gravar(40004, dados.condutividadeOutUsCm, 1);
+    else if (dados.correnteAmp !== undefined)    gravar(40004, dados.correnteAmp, 1);
+    // 40005: tensão DC ou pH com centésimos (somente se presente — nunca valor inventado 48.0)
+    if (dados.tensaoBarramentoDC !== undefined)      gravar(40005, dados.tensaoBarramentoDC, 10);
+    else if (dados.ph !== undefined)                 gravar(40005, dados.ph, 100);
+    // 40006: corrente (somente se presente)
+    if (dados.correnteAmp !== undefined)             gravar(40006, dados.correnteAmp, 10);
+    // 40007/40008: somente se presentes
+    if (dados.nivelTanqueReusoPct !== undefined)     gravar(40007, dados.nivelTanqueReusoPct, 10);
+    if (dados.fluoretoInPPM !== undefined)           gravar(40008, dados.fluoretoInPPM, 100);
+
+    // 40009: fluoretoOut tem precedência; temperaturaC serve de fallback — ambos só se presentes
+    if (dados.fluoretoOutPPM !== undefined) {
+      gravar(40009, dados.fluoretoOutPPM, 100);
+    } else if (dados.temperaturaC !== undefined) {
+      gravar(40009, dados.temperaturaC, 10);
+    }
+
     // PR-1: Contenção Mínima — Não sobrescrever Setpoint 40010 (SP-PID) com telemetria de processo
     if (regs[40010] && regs[40010].somenteLeitura) {
       gravar(40010, dados.temperaturaC, 10);
     }
 
+    // PR-3b: Novos registradores do mapa v2.1 — apenas quando o campo estiver presente
+    if (dados.saidaInversorVfdPct !== undefined) gravar(40011, dados.saidaInversorVfdPct, 1);
+    if (dados.temperaturaCelulaC  !== undefined) gravar(40012, dados.temperaturaCelulaC,  10);
+    if (dados.fluoretoOutPPM      !== undefined) gravar(40013, dados.fluoretoOutPPM,       100);
+    if (dados.tensaoCelulaV       !== undefined) gravar(40017, dados.tensaoCelulaV,        100);
+    gravar(40099, MAP_VERSION_ATUAL, 1);
+
     if (estado) {
       if (regs[1]) regs[1].valor = Boolean(estado.bombaAlimentacaoAtiva);
       if (regs[2]) regs[2].valor = Boolean(estado.fonteDcAtiva);
-      // PR-1: Contenção Mínima — Não sobrescrever a Coil 3 (Válvula de Purga XV-102) com interlock
-      // O intertravamento físico cabeado é espelhado no Discrete Input 10001 (Função 02)
+      if (regs[3] && estado.valvulaPurgaAtiva !== undefined) regs[3].valor = Boolean(estado.valvulaPurgaAtiva);
+      if (regs[4] && estado.valvulaReusoAtiva !== undefined) regs[4].valor = Boolean(estado.valvulaReusoAtiva);
+      if (regs[5] && estado.bombaPocoAtiva !== undefined) regs[5].valor = Boolean(estado.bombaPocoAtiva);
+      if (regs[6] && estado.modoPidAuto !== undefined) regs[6].valor = Boolean(estado.modoPidAuto);
+      // PR-3b: Discrete Inputs com polaridade NF (1 = Seguro/OK, 0 = Falha/Atuado)
+      if (regs[10001]) regs[10001].valor = !Boolean(estado.interlockDisparado);
+      if (regs[10002]) regs[10002].valor = dados.pressaoBar !== undefined ? dados.pressaoBar <= 2.80 : true;
     }
 
     this.notify();
@@ -290,10 +324,35 @@ class PlcService {
     let aplicados = 0;
     const p = valores[40001];
     if (typeof p === "number" && Number.isFinite(p)) this.ultimaLeituraPressaoMs = Date.now();
+
+    // PR-3b: Verificação cíclica de compatibilidade de versão de mapa (40099)
+    if (valores[REGISTRADOR_MAP_VERSION] !== undefined) {
+      const versaoLida = Number(valores[REGISTRADOR_MAP_VERSION]);
+      if (versaoLida !== MAP_VERSION_ATUAL) {
+        if (this.versaoMapaValida) {
+          try {
+            dbInstance.inserirAlarme(
+              'CRITICO',
+              comCodigo('SCD-PLC-009', `Incompatibilidade de Versão de Mapa Modbus (MAP_VERSION): esperado ${MAP_VERSION_ATUAL} (v2.1), lido ${versaoLida}. Escritas bloqueadas.`),
+              null,
+              'SCD-PLC-009'
+            );
+          } catch (e) {
+            console.error('Erro ao emitir alarme SCD-PLC-009:', e);
+          }
+        }
+        this.versaoMapaValida = false;
+      } else {
+        this.versaoMapaValida = true;
+      }
+    }
+
     for (const [k, v] of Object.entries(valores)) {
       const reg = this.config.mapaRegistradores[Number(k)];
       if (!reg) continue;
-      const tipoOk = reg.tipo === "COIL" ? typeof v === "boolean" : typeof v === "number" && Number.isFinite(v);
+      const tipoOk = (reg.tipo === "COIL" || reg.tipo === "DISCRETE_INPUT")
+        ? typeof v === "boolean"
+        : typeof v === "number" && Number.isFinite(v);
       if (!tipoOk) continue;
       this.config.mapaRegistradores[Number(k)] = { ...reg, valor: v };
       aplicados++;
@@ -356,9 +415,24 @@ class PlcService {
    * Em CLP real, o valor local só muda depois da confirmação do CLP.
    */
   public async escreverRegistrador(endereco: number, novoValor: number | boolean): Promise<Resultado<void>> {
+    // PR-3b: Bloqueio imediato se o mapa Modbus no CLP for incompatível
+    if (!this.versaoMapaValida) {
+      return falha("SCD-PLC-009", "Escrita bloqueada por segurança: Incompatibilidade de versão de mapa Modbus no CLP (SCD-PLC-009).");
+    }
+
     const reg = this.config.mapaRegistradores[endereco];
     if (!reg) return falha("SCD-PLC-003", `Registrador #${endereco} não existe no mapa.`);
     if (reg.somenteLeitura) return falha("SCD-PLC-004", `Registrador ${reg.nome} (#${endereco}) é somente leitura.`);
+
+    // PR-3b: Validação de limites operacionais e clamping
+    const validacao = validarEscritaModbusV21(endereco, novoValor);
+    if (!validacao.valido) {
+      const cod = reg.somenteLeitura ? "SCD-PLC-004" : "SCD-PLC-006";
+      return falha(cod, validacao.motivo ?? `Escrita inválida no registrador ${reg.nome} (#${endereco}).`);
+    }
+    if (validacao.valorSanitizado !== undefined) {
+      novoValor = validacao.valorSanitizado;
+    }
 
     const tipoOk = reg.tipo === "COIL"
       ? typeof novoValor === "boolean"
@@ -371,7 +445,11 @@ class PlcService {
       // Segurança: só energiza bomba/fonte com enlace confirmado e sem intertravamento/E-STOP ativo.
       // (Desenergizar, isto é, escrever false, é sempre permitido.)
       if (novoValor === true && COILS_ENERGIZACAO.includes(endereco)) {
-        const interlockAtivo = this.config.mapaRegistradores[COIL_INTERLOCK]?.valor !== false;
+        const estopAtivo = this.config.mapaRegistradores[10001]?.valor === false;
+        const sobrepressaoAtiva = this.config.mapaRegistradores[10002]?.valor === false;
+        const coilInterlockAtivo = this.config.mapaRegistradores[COIL_INTERLOCK]?.valor !== false;
+        const interlockAtivo = estopAtivo || sobrepressaoAtiva || coilInterlockAtivo;
+
         if (this.config.status !== "CONECTADO" || interlockAtivo) {
           const motivo = this.config.status !== "CONECTADO"
             ? "estado do CLP desconhecido (sem comunicação confirmada)"

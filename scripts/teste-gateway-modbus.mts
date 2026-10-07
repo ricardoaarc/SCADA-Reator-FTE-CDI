@@ -41,7 +41,7 @@ c=lerConfigPlc({...base,PLC_GATEWAY_ALLOW_WRITE:'true'}); t('escrita sem token -
 c=lerConfigPlc({...base,PLC_GATEWAY_ALLOW_WRITE:'true',PLC_GATEWAY_TOKEN:'s3',PLC_WRITE_ALLOWLIST:'4, 2,x'}); t('escrita com token + allowlist parseada', c.permitirEscrita && c.listaEscrita.join()==='4,2');
 // ---------- endereçamento ----------
 t('mapeamento 40001->holding 0, 1->coil 0', JSON.stringify(enderecoParaModbus(40001))==='{"tipo":"HOLDING","offset":0}' && JSON.stringify(enderecoParaModbus(1))==='{"tipo":"COIL","offset":0}');
-t('endereço inválido (0, 12345, 1.5, "a") rejeitado', [0,12345,1.5,'a'].every(e=>{try{enderecoParaModbus(e);return false}catch(x){return x instanceof GatewayError && x.codigo==='SCD-PLC-003'}}));
+t('endereço inválido (0, 25000, 1.5, "a") rejeitado', [0,25000,1.5,'a'].every(e=>{try{enderecoParaModbus(e);return false}catch(x){return x instanceof GatewayError && x.codigo==='SCD-PLC-003'}}));
 const g=agruparLeituras([40001,40002,40003,40010,1,2,3,4,40001]);
 t('agrupa em leituras contíguas', g.length===3 && g.some((x:any)=>x.tipo==='HOLDING'&&x.inicio===40001&&x.fim===40003) && g.some((x:any)=>x.tipo==='COIL'&&x.inicio===1&&x.fim===4));
 t('respeita máximo por leitura', agruparLeituras(Array.from({length:10},(_,i)=>40001+i),4).length===3);

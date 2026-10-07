@@ -15,7 +15,9 @@ import {
   FteCdiLayoutPosition,
   ConthecLayoutPosition,
   ModoVisualizacaoSinoptico,
-  EstagioSinfoniaQuimica
+  EstagioSinfoniaQuimica,
+  BombaBiossonicaPosicao,
+  ModoControleValvula
 } from "../types";
 
 export interface ValvulaMotorizada {
@@ -448,8 +450,8 @@ export class PurifyWaveIntegrationService {
     }
   }
 
-  public setModoVisualizacao(modo: string): void {
-    this.state.modoVisualizacao = modo;
+  public setModoVisualizacao(modo: ModoVisualizacaoSinoptico | string): void {
+    this.state.modoVisualizacao = modo as ModoVisualizacaoSinoptico;
     this.salvarConfiguracaoPersistida();
     this.notificarListeners();
   }
@@ -474,7 +476,7 @@ export class PurifyWaveIntegrationService {
     v.posicaoAberturaPct = comando === 'ABRIR' ? 100 : 0;
     v.fimCursoAbertoZSO = comando === 'ABRIR';
     v.fimCursoFechadoZSC = comando === 'FECHAR';
-    v.modoControle = modo;
+    v.modoControle = modo as ModoControleValvula;
     v.ultimaManobraTimestamp = new Date().toLocaleTimeString();
     v.operadorUltimaManobra = 'OPERADOR_SCADA';
     this.state.valvulas[tag] = v;
@@ -595,8 +597,8 @@ export class PurifyWaveIntegrationService {
     this.notificarListeners();
   }
 
-  public trocarPosicaoBiossonica(posicao: string): void {
-    this.state.biossonica.posicaoAtual = posicao;
+  public trocarPosicaoBiossonica(posicao: BombaBiossonicaPosicao | string): void {
+    this.state.biossonica.posicaoAtual = posicao as BombaBiossonicaPosicao;
     I.inserirAlarme('INFO', `[BBS-100] Topologia alterada: Bomba Biossônica movida para ${posicao}.`);
     this.notificarListeners();
   }
@@ -738,9 +740,9 @@ export class PurifyWaveIntegrationService {
     ];
   }
 
-  public selecionarTopologia(topId: string): void {
+  public selecionarTopologia(topId: TopologiaTratamentoId | string): void {
     const anterior = this.state.topologiaAtiva;
-    this.state.topologiaAtiva = topId;
+    this.state.topologiaAtiva = topId as TopologiaTratamentoId;
     const top = this.obterTopologiasDisponiveis().find((t: any) => t.id === topId);
     if (top) {
       const vMap = top.statusValvulasMotorizadas;
@@ -766,9 +768,9 @@ export class PurifyWaveIntegrationService {
     this.notificarListeners();
   }
 
-  public setPosicaoFteCdi(pos: string): void {
+  public setPosicaoFteCdi(pos: FteCdiLayoutPosition | string): void {
     const ant = this.state.posicaoFteCdi;
-    this.state.posicaoFteCdi = pos;
+    this.state.posicaoFteCdi = pos as FteCdiLayoutPosition;
     let label = 'MEIO (Série Central)';
     if (pos === 'POS_1_INICIO') label = 'INÍCIO (Montante / Desfluoretação Primária)';
     if (pos === 'POS_3_FINAL') label = 'FINAL (Jusante / Polimento Terminal)';
@@ -777,9 +779,9 @@ export class PurifyWaveIntegrationService {
     this.notificarListeners();
   }
 
-  public setPosicaoConthec(pos: string): void {
+  public setPosicaoConthec(pos: ConthecLayoutPosition | string): void {
     const ant = this.state.posicaoConthec;
-    this.state.posicaoConthec = pos;
+    this.state.posicaoConthec = pos as ConthecLayoutPosition;
     let label = 'INÍCIO (Montante / Pré-Oxidação)';
     if (pos === 'POS_2_MEIO') label = 'MEIO (Intermediário / Pós-Oxidação)';
     if (pos === 'POS_3_FINAL') label = 'FINAL (Jusante / Polimento & Desinfecção)';
@@ -1049,8 +1051,8 @@ export class PurifyWaveIntegrationService {
     this.notificarListeners();
   }
 
-  public forcarTransicaoEstagio(estagio: string): void {
-    this.state.estagioAtual = estagio;
+  public forcarTransicaoEstagio(estagio: EstagioSinfoniaQuimica | string): void {
+    this.state.estagioAtual = estagio as EstagioSinfoniaQuimica;
     this.state.progressoEstagioPct = 0;
     this.notificarListeners();
   }

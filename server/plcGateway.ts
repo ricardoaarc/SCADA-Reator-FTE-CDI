@@ -88,7 +88,8 @@ export class GatewayError extends Error {
   }
 }
 
-export type EnderecoModbus = { tipo: 'HOLDING' | 'COIL'; offset: number };
+export type TipoModbus = 'HOLDING' | 'COIL' | 'DISCRETE_INPUT' | 'INPUT_REGISTER';
+export type EnderecoModbus = { tipo: TipoModbus; offset: number };
 
 export function enderecoParaModbus(endereco: unknown): EnderecoModbus {
   if (typeof endereco !== 'number' || !Number.isInteger(endereco)) {
@@ -96,20 +97,22 @@ export function enderecoParaModbus(endereco: unknown): EnderecoModbus {
   }
   if (endereco >= 40001 && endereco <= 49999) return { tipo: 'HOLDING', offset: endereco - 40001 };
   if (endereco >= 1 && endereco <= 9999) return { tipo: 'COIL', offset: endereco - 1 };
-  throw new GatewayError(400, 'SCD-PLC-003', `Endereço ${endereco} fora das faixas suportadas (1..9999 coils, 40001..49999 holding).`);
+  if (endereco >= 10001 && endereco <= 19999) return { tipo: 'DISCRETE_INPUT', offset: endereco - 10001 };
+  if (endereco >= 30001 && endereco <= 39999) return { tipo: 'INPUT_REGISTER', offset: endereco - 30001 };
+  throw new GatewayError(400, 'SCD-PLC-003', `Endereço ${endereco} fora das faixas suportadas (1..9999 coils, 10001..19999 discrete inputs, 30001..39999 input registers, 40001..49999 holding).`);
 }
 
 /** Agrupa endereços em leituras contíguas (menos requisições ao CLP). */
-export function agruparLeituras(enderecos: number[], maxPorLeitura = 100): Array<{ tipo: 'HOLDING' | 'COIL'; inicio: number; fim: number }> {
-  const porTipo: Record<'HOLDING' | 'COIL', number[]> = { HOLDING: [], COIL: [] };
+export function agruparLeituras(enderecos: number[], maxPorLeitura = 100): Array<{ tipo: TipoModbus; inicio: number; fim: number }> {
+  const porTipo: Record<TipoModbus, number[]> = { HOLDING: [], COIL: [], DISCRETE_INPUT: [], INPUT_REGISTER: [] };
   for (const e of new Set(enderecos)) {
     const m = enderecoParaModbus(e);
     porTipo[m.tipo].push(e);
   }
-  const grupos: Array<{ tipo: 'HOLDING' | 'COIL'; inicio: number; fim: number }> = [];
-  (['HOLDING', 'COIL'] as const).forEach(tipo => {
+  const grupos: Array<{ tipo: TipoModbus; inicio: number; fim: number }> = [];
+  (['HOLDING', 'COIL', 'DISCRETE_INPUT', 'INPUT_REGISTER'] as const).forEach(tipo => {
     const lista = porTipo[tipo].sort((a, b) => a - b);
-    let g: { tipo: 'HOLDING' | 'COIL'; inicio: number; fim: number } | null = null;
+    let g: { tipo: TipoModbus; inicio: number; fim: number } | null = null;
     for (const e of lista) {
       if (g && e === g.fim + 1 && e - g.inicio + 1 <= maxPorLeitura) g.fim = e;
       else { g = { tipo, inicio: e, fim: e }; grupos.push(g); }
@@ -190,7 +193,9 @@ export class ModbusGateway {
         const c = await this.conectar();
         const m = enderecoParaModbus(this.cfg.enderecoProva);
         if (m.tipo === 'HOLDING') await c.readHoldingRegisters(m.offset, 1);
-        else await c.readCoils(m.offset, 1);
+        else if (m.tipo === 'COIL') await c.readCoils(m.offset, 1);
+        else if (m.tipo === 'DISCRETE_INPUT') await c.readDiscreteInputs(m.offset, 1);
+        else await c.readInputRegisters(m.offset, 1);
         return { latenciaMs: Date.now() - t0 };
       } catch (err) {
         const e = err as any;
@@ -206,28 +211,45 @@ export class ModbusGateway {
     return this.executar(async () => {
       const grupos = agruparLeituras(enderecos);
       const out: Record<number, number | boolean> = {};
-      try {
-        const c = await this.conectar();
-        for (const g of grupos) {
-          const len = g.fim - g.inicio + 1;
+      const c = await this.conectar().catch(err => { throw this.traduzir(err); });
+      for (const g of grupos) {
+        const len = g.fim - g.inicio + 1;
+        try {
           if (g.tipo === 'HOLDING') {
             const r = await c.readHoldingRegisters(g.inicio - 40001, len);
             r.data.forEach((v, i) => { out[g.inicio + i] = v; });
-          } else {
+          } else if (g.tipo === 'COIL') {
             const r = await c.readCoils(g.inicio - 1, len);
             for (let i = 0; i < len; i++) out[g.inicio + i] = Boolean(r.data[i]);
+          } else if (g.tipo === 'DISCRETE_INPUT') {
+            const r = await c.readDiscreteInputs(g.inicio - 10001, len);
+            for (let i = 0; i < len; i++) out[g.inicio + i] = Boolean(r.data[i]);
+          } else if (g.tipo === 'INPUT_REGISTER') {
+            const r = await c.readInputRegisters(g.inicio - 30001, len);
+            r.data.forEach((v, i) => { out[g.inicio + i] = v; });
           }
+        } catch (err) {
+          const e = err as any;
+          if (typeof e?.modbusCode === 'number') {
+            // Exceção Modbus (função não suportada no CLP): ignorar este grupo e continuar
+            console.warn(`[PLC-GATEWAY] Grupo ${g.tipo} ${g.inicio}..${g.fim} retornou exceção Modbus ${e.modbusCode} — ignorado.`);
+            continue;
+          }
+          // Erro de rede/timeout: aborta toda a leitura
+          throw this.traduzir(err);
         }
-        return out;
-      } catch (err) {
-        throw this.traduzir(err);
       }
+      return out;
     });
   }
+
 
   escrever(endereco: number, valor: number | boolean): Promise<void> {
     return this.executar(async () => {
       const m = enderecoParaModbus(endereco);
+      if (m.tipo === 'DISCRETE_INPUT' || m.tipo === 'INPUT_REGISTER') {
+        throw new GatewayError(400, 'SCD-PLC-004', `Endereço ${endereco} (${m.tipo}) é estritamente somente-leitura.`);
+      }
       try {
         const c = await this.conectar();
         if (m.tipo === 'COIL') await c.writeCoil(m.offset, Boolean(valor));
@@ -250,7 +272,47 @@ export class ModbusGateway {
     });
   }
 
+  private watchdogTimer: ReturnType<typeof setInterval> | null = null;
+  private watchdogCounter = 1;
+  private watchdogAtivo = false;
+  private ultimoWatchdogEnvioMs: number | null = null;
+
+  /** PR-3d: Inicia envio de heartbeat industrial (reg 40015) para manter o fail-safe no CLP */
+  iniciarWatchdog(intervaloMs = 1000): void {
+    if (this.watchdogTimer) return;
+    if (!this.cfg.habilitado || !this.cfg.permitirEscrita || !this.cfg.listaEscrita.includes(40015)) {
+      return;
+    }
+    this.watchdogAtivo = true;
+    this.watchdogTimer = setInterval(async () => {
+      try {
+        this.watchdogCounter = (this.watchdogCounter % 65535) + 1;
+        await this.escrever(40015, this.watchdogCounter);
+        this.ultimoWatchdogEnvioMs = Date.now();
+      } catch (err) {
+        console.warn(`[PLC-WATCHDOG] Falha ao enviar batimento no reg 40015: ${(err as Error)?.message}`);
+      }
+    }, intervaloMs);
+  }
+
+  pararWatchdog(): void {
+    if (this.watchdogTimer) {
+      clearInterval(this.watchdogTimer);
+      this.watchdogTimer = null;
+    }
+    this.watchdogAtivo = false;
+  }
+
+  obterStatusWatchdog() {
+    return {
+      ativo: this.watchdogAtivo,
+      contador: this.watchdogCounter,
+      ultimoEnvioMs: this.ultimoWatchdogEnvioMs
+    };
+  }
+
   fechar(): void {
+    this.pararWatchdog();
     this.descartarConexao();
   }
 }
@@ -278,8 +340,14 @@ export function criarRotasPlc(cfg: PlcGatewayConfig, gateway: ModbusGateway = ne
       escritaHabilitada: cfg.habilitado && cfg.permitirEscrita,
       exigeToken: cfg.token !== null,
       avisos: cfg.avisos,
+      watchdog: gateway.obterStatusWatchdog()
     });
   });
+
+  // PR-3d: Inicia watchdog se configurado para escrita
+  if (cfg.habilitado && cfg.permitirEscrita && cfg.listaEscrita.includes(40015)) {
+    gateway.iniciarWatchdog();
+  }
 
   // Todas as demais rotas: gateway ligado + token (se configurado)
   router.use((req: Request, res: Response, next) => {
@@ -319,6 +387,9 @@ export function criarRotasPlc(cfg: PlcGatewayConfig, gateway: ModbusGateway = ne
         throw new GatewayError(403, 'SCD-PLC-008', 'Escrita desabilitada no gateway (PLC_GATEWAY_ALLOW_WRITE + PLC_GATEWAY_TOKEN).');
       }
       const m = enderecoParaModbus(endereco);
+      if (m.tipo === 'DISCRETE_INPUT' || m.tipo === 'INPUT_REGISTER') {
+        throw new GatewayError(400, 'SCD-PLC-004', `Endereço ${endereco} (${m.tipo}) é estritamente somente-leitura.`);
+      }
       if (!cfg.listaEscrita.includes(endereco)) {
         throw new GatewayError(403, 'SCD-PLC-008', `Endereço ${endereco} não está na lista de escrita permitida.`);
       }

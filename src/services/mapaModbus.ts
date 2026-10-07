@@ -597,3 +597,26 @@ export function validarPlausibilidadeLeitura(endereco: number, valor: number): {
 
   return { plausivel: true };
 }
+
+/**
+ * Converte o catálogo canônico de metadados v2.1 em Record<number, ModbusRegister>
+ * pronto para consumo pelo PlcService e IHM SCADA.
+ */
+export function gerarMapaRegistradoresV21(): Record<number, ModbusRegister> {
+  const mapa: Record<number, ModbusRegister> = {};
+  for (const [endStr, meta] of Object.entries(MAPA_MODBUS_V2_1)) {
+    const end = Number(endStr);
+    mapa[end] = {
+      endereco: end,
+      tipo: meta.tipoModbus as any,
+      nome: meta.nome,
+      descricao: meta.descricao,
+      valor: meta.valorPadrao,
+      unidade: meta.unidade,
+      somenteLeitura: meta.somenteLeitura
+    };
+  }
+  return mapa;
+}
+
+export const MAPA_MODBUS_V2_1_REGISTRADORES = gerarMapaRegistradoresV21();

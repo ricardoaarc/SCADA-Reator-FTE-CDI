@@ -22,7 +22,7 @@ Tudo vem **desligado**. O destino do CLP é definido **só no servidor**: o nave
 | `PLC_PROBE_ADDRESS` | `40001` | Endereço lido no "Testar Ping" quando não há varredura. |
 | `PLC_GATEWAY_TOKEN` | – | Se definido, exigido no header `x-gateway-token` (test/read/write). |
 | `PLC_GATEWAY_ALLOW_WRITE` | `false` | Permite escrita. **Só vale se `PLC_GATEWAY_TOKEN` estiver definido.** |
-| `PLC_WRITE_ALLOWLIST` | `1,2,4` | Endereços que podem ser escritos (coils da bomba, fonte DC e válvula de rejeito). |
+| `PLC_WRITE_ALLOWLIST` | `1,2,3,4,6,40010,40015,40016` | Endereços com escrita permitida no Mapa v2.1 (coils de processo, modo PID, setpoints e watchdog). |
 
 Exemplo mínimo somente leitura:
 
@@ -38,24 +38,34 @@ PLC_GATEWAY_ENABLED=true
 PLC_HOST=192.168.1.120
 PLC_GATEWAY_TOKEN=um-segredo-longo
 PLC_GATEWAY_ALLOW_WRITE=true
+PLC_WRITE_ALLOWLIST=1,2,3,4,6,40010,40015,40016
 ```
 
-## Endereçamento
+## Endereçamento (Conformidade Modbus v2.1 / IEC 61131-3)
 
-`40001..49999` = holding register (função 03; offset = endereço − 40001). `1..9999` = coil (função 01/05; offset = endereço − 1).
-É o mesmo mapa de registradores da tela "Gateway Modbus" (PT-101 em 40001 etc.). Se o seu CLP usa outro mapa, ajuste `REGISTRADORES_INICIAIS` em `src/services/PlcService.ts`.
+* `1..9999` = Coils Digitais (Função 01/05; offset = endereço − 1). Coils 1 a 6.
+* `10001..19999` = Discrete Inputs (Função 02; offset = endereço − 10001). Somente leitura (Read-Only). 10001 (E-STOP NF) e 10002 (Sobrepressão NF).
+* `30001..39999` = Input Registers (Função 04; offset = endereço − 30001). Somente leitura (Read-Only).
+* `40001..49999` = Holding Registers (Função 03/06/16; offset = endereço − 40001). Registradores analógicos de telemetria e setpoints.
+  - `40010`: Setpoint de Vazão da malha PID (500 a 1500 L/h).
+  - `40011`: Variável Manipulada (CV-VFD) gerada pelo CLP (Read-Only).
+  - `40015`: Contador do Watchdog Industrial do SCADA (incrementado a cada 1.000 ms pelo servidor Node.js).
+  - `40016`: CV Manual do Inversor VFD (0 a 100%).
+  - `40099`: MAP_VERSION congelado (valor decimal 21, código de erro `SCD-PLC-009` se incompatível).
+
+É o mapa oficial tipado e congelado em `src/services/mapaModbus.ts`.
 
 ## Endpoints
 
 | Rota | Função |
 |---|---|
-| `GET /api/plc/status` | Estado do gateway (ligado, escrita habilitada, exige token). Sem token. |
-| `POST /api/plc/test` | Testa a comunicação lendo 1 registrador. |
-| `POST /api/plc/read` `{enderecos:[...]}` | Lê até 64 endereços (agrupados em leituras contíguas). |
-| `POST /api/plc/write` `{endereco, valor}` | Escreve e **confirma por releitura**. Registra origem, endereço e valor no log do servidor. |
+| `GET /api/plc/status` | Estado do gateway (ligado, escrita habilitada, exige token, status do watchdog). Sem token. |
+| `POST /api/plc/test` | Testa a comunicação lendo 1 registrador de prova. |
+| `POST /api/plc/read` `{enderecos:[...]}` | Lê até 64 endereços (Funções 01, 02, 03 e 04 agrupadas em blocos contíguos). |
+| `POST /api/plc/write` `{endereco, valor}` | Escreve e **confirma por releitura**. Rejeita escritas em pontos somente-leitura (400) e fora da allowlist (403). |
 
 Erros devolvem `{sucesso:false, codigo:'SCD-…', erro}`: `SCD-PLC-005` (gateway desligado, HTTP 503), `SCD-AUT-001` (token, 401),
-`SCD-PLC-001` (timeout, 504), `SCD-PLC-002` (falha de comunicação, 502), `SCD-PLC-003/006` (endereço/valor inválido, 400), `SCD-PLC-008` (escrita negada, 403).
+`SCD-PLC-001` (timeout, 504), `SCD-PLC-002` (falha de comunicação, 502), `SCD-PLC-003/006` (endereço/valor inválido, 400), `SCD-PLC-004` (somente-leitura, 400), `SCD-PLC-008` (escrita negada, 403), `SCD-PLC-009` (MAP_VERSION divergente).
 Lista completa em `docs/CODIGOS_DE_ERRO.md`.
 
 ## Como o SCADA se comporta em CLP_REAL
